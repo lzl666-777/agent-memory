@@ -21,3 +21,7 @@ jobs:
         run: pip install -e ".[dev]"
       - name: Run tests
         run: pytest -q
+      - name: Retrieval evaluation
+        run: python -m agent_memory.evaluation
+      - name: End-to-end example
+        run: python examples/ecommerce_ops.py

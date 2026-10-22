@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-memory"
-version = "0.1.0"
+version = "0.2.0"
 description = "Decision memory for AI agents: remember what was decided, record what happened, recall lessons before the next decision."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -26,3 +26,6 @@ agent-memory-mcp = "agent_memory.mcp_server:main"
 
 [tool.setuptools.packages.find]
 include = ["agent_memory*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

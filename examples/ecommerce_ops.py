@@ -75,7 +75,7 @@ print(f"当前生效事实: 交期 {current[0].record.structured['value']} 天�
 
 print()
 print("=" * 60)
-print("场景 5：遗忘预览（默认 180 天半衰期）")
+print("场景 5：遗忘预览（事实按 180 天半衰期衰减；决策与历史版本受保护）")
 print("=" * 60)
 would_forget = mem.forget(dry_run=True)
-print(f"将被遗忘: {len(would_forget)} 条（刚写入的记忆都还新鲜）")
+print(f"将被遗忘: {len(would_forget)} 条（刚写入的事实还新鲜，决策和历史版本不在遗忘范围内）")
