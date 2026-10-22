@@ -25,3 +25,5 @@ jobs:
         run: python -m agent_memory.evaluation
       - name: End-to-end example
         run: python examples/ecommerce_ops.py
+      - name: Closed-loop demo
+        run: python examples/agent_loop.py
