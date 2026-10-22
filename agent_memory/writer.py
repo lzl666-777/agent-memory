@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 from .models import MemoryRecord, MemoryType, utcnow
 from .store import Store
@@ -23,6 +23,26 @@ class WritePolicy:
         return 0.5
 
     # ------------------------------------------------------------------ #
+    def find_redundant(self, store: Store, new: MemoryRecord) -> Optional[MemoryRecord]:
+        """An identical current fact already exists: writing it again is a no-op.
+
+        Without this, re-asserting ``lead_time_days = 45`` three times leaves
+        three *current* rows -- the memory bloat this module claims to prevent.
+        """
+        key = new.structured.get("key")
+        if key is None or new.type is not MemoryType.FACT:
+            return None
+        for old in store.query(
+            entity=new.entity, types=[MemoryType.FACT.value], include_history=False
+        ):
+            if (
+                old.id != new.id
+                and old.structured.get("key") == key
+                and old.structured.get("value") == new.structured.get("value")
+            ):
+                return old
+        return None
+
     def find_conflicts(self, store: Store, new: MemoryRecord) -> List[MemoryRecord]:
         """Facts about the same entity + key with a different value conflict.
 

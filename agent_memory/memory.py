@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .forgetting import forget as _forget
 from .models import MemoryRecord, MemoryType
@@ -17,12 +17,19 @@ class Memory:
     Args:
         path: SQLite file path, or ``":memory:"`` for an ephemeral store.
         embedder: optional ``callable(text) -> vector`` to enable semantic recall.
+        weights: optional override of the retrieval signal weights, used by
+            ablations (see :mod:`agent_memory.evaluation`).
     """
 
-    def __init__(self, path: str = "memory.db", embedder: Optional[Callable[[str], List[float]]] = None):
+    def __init__(
+        self,
+        path: str = "memory.db",
+        embedder: Optional[Callable[[str], List[float]]] = None,
+        weights: Optional[Dict[str, float]] = None,
+    ):
         self.store = Store(path)
         self.policy = WritePolicy()
-        self.retriever = Retriever(self.store, embedder=embedder)
+        self.retriever = Retriever(self.store, embedder=embedder, weights=weights)
 
     # ------------------------------------------------------------------ #
     # writes
@@ -47,6 +54,9 @@ class Memory:
             kind, entity, content, structured=structured,
             importance=importance, confidence=confidence, source=source,
         )
+        existing = self.policy.find_redundant(self.store, record)
+        if existing is not None:
+            return existing
         conflicts = self.policy.find_conflicts(self.store, record)
         self.store.insert(record)
         for old in conflicts:
@@ -104,8 +114,18 @@ class Memory:
         threshold: float = 0.05,
         half_life_days: float = 180.0,
         dry_run: bool = False,
+        include_decisions: bool = False,
+        include_history: bool = False,
     ) -> List[MemoryRecord]:
-        return _forget(self.store, threshold=threshold, half_life_days=half_life_days, dry_run=dry_run)
+        """Drop stale facts. Decisions and superseded history are protected."""
+        return _forget(
+            self.store,
+            threshold=threshold,
+            half_life_days=half_life_days,
+            dry_run=dry_run,
+            include_decisions=include_decisions,
+            include_history=include_history,
+        )
 
     def close(self) -> None:
         self.store.close()
