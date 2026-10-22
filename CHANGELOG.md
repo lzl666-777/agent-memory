@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.1
+
+### Added
+
+- `examples/agent_loop.py`: a closed-loop demo where the same agent, world and
+  policy produce a different outcome depending on whether the first quarter's
+  result was recorded. It prints the exact prompt the model receives when memory
+  is consulted. Covered by `tests/test_agent_loop.py`.
+
+### Changed
+
+- CI also runs the demo.
+
 ## 0.3.0
 
 The library stops being only a search API and becomes an intervention API.

@@ -24,7 +24,7 @@ from .models import MemoryRecord, MemoryType
 from .retrieval import RetrievedMemory
 from .store import Store
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 __all__ = [
     "Memory",

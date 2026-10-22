@@ -119,6 +119,25 @@ mem.record_outcome(rec.id, outcome="B 断货两周",
 cannot flood a context window. `context` only *ranks* the history — it never
 filters it away, because a precedent is shown, not searched for.
 
+### Does it change the outcome?
+
+`examples/agent_loop.py` runs the same agent twice against the same simulated
+world: identical suppliers, identical request, identical policy. The only
+difference is whether the first quarter's result was recorded.
+
+```
+                       stockouts   second decision
+no memory              2/2         switch on lead time (repeat the mistake)
+with agent-memory      1/2         verify capacity first -> decline
+```
+
+The first mistake still happens — memory is not clairvoyance. It prevents the
+second one. The full prompt is printed, and the policy is a deterministic
+stand-in so the demo runs offline; swap it for a real model and the loop is
+unchanged. `tests/test_agent_loop.py` asserts the causal claim, including that a
+supplier which *can* carry the demand is still switched to (the check is a
+check, not a blanket refusal).
+
 ### Conflict resolution
 
 Facts are versioned, not overwritten:
@@ -275,10 +294,11 @@ the precedents and a ready-to-inject `prompt`. `recall` returns `why` and
 pip install -e ".[dev]"
 pytest -q
 python examples/ecommerce_ops.py
+python examples/agent_loop.py
 python -m agent_memory.evaluation
 ```
 
-CI runs the tests, the evaluation and the example on Python 3.10–3.12.
+CI runs the tests, the evaluation and both examples on Python 3.10–3.12.
 
 ## License
 
