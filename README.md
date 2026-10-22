@@ -1,6 +1,6 @@
 # agent-memory
 
-> Give your AI agent a memory of **decisions** — not just of facts.
+> Give your AI agent a memory of **decisions** — and stop it from repeating them.
 
 ## The problem
 
@@ -41,6 +41,7 @@ rec = mem.remember(
     type="decision",
     entity="供应商A",
     content="决定更换供应商：把供应商A换成供应商B",
+    action_type="supplier_switch",          # what was done, not who it was done to
     structured={
         "decision": "换成供应商B",
         "rationale": "A 交期延迟、产能不足",
@@ -49,7 +50,12 @@ rec = mem.remember(
 )
 
 # 2. later, record what actually happened
-mem.record_outcome(rec.id, outcome="供应商B 在 6 月断货两周", lesson="先评估备选产能")
+mem.record_outcome(
+    rec.id,
+    outcome="供应商B 在 6 月断货两周",
+    lesson="先评估备选产能",
+    status="failure",                      # declared, never inferred
+)
 
 # 3. next time, recall the experience
 for hit in mem.recall(entity="供应商A", query="要不要换供应商", types=["decision"]):
@@ -63,6 +69,55 @@ for hit in mem.recall(entity="供应商A", query="要不要换供应商", types=
 which one carried the hit. `why` lists the paths that matched
 (`structured` / `lexical` / `semantic`) plus `outcome` when the record has a
 recorded result. Nothing about a recall is a black box.
+
+## Before the decision
+
+`recall()` answers *"what do we know about X?"*. The question that changes
+behaviour is *"we are about to do X again — what happened last time?"*.
+`before()` answers that one, and it is keyed on the **action**, not the entity:
+
+```python
+card = mem.before("supplier_switch", context="要不要把供应商C换成供应商D")
+print(card.verdict)      # caution
+print(card.to_prompt())
+```
+
+```
+PRECEDENT CHECK · supplier_switch
+verdict: CAUTION — 1 recorded outcome, 1 failed
+lessons from earlier attempts:
+  - 换供应商前必须先评估备选产能，不能只看交期
+precedents:
+  1. [供应商A · 2026-03] 换成供应商B
+     -> 供应商B 在 6 月断货两周 (failure)
+Before acting: say how each failure mode above is avoided or accepted.
+```
+
+The lesson was learned on supplier A and it fires when the agent is about to
+switch supplier **C**. That is the point: **a lesson belongs to the action, not
+to the object it happened to.** A recall API keyed on `entity` can never surface
+it, which is why the previous version could not.
+
+| verdict | when |
+|---|---|
+| `no_history` | nothing recorded for this action |
+| `unverified` | decisions exist, none has an outcome |
+| `clear` | at least one outcome, no failure |
+| `caution` | some failure, or too few attempts to quote a rate |
+| `high_risk` | ≥2 recorded outcomes and ≥50% of them non-clean |
+
+`status` is **declared, not inferred**. The library never guesses "failure" from
+free text, and an unclassified outcome is never counted as a success:
+
+```python
+mem.record_outcome(rec.id, outcome="B 断货两周",
+                   lesson="先评估备选产能",
+                   status="failure")   # success | failure | mixed | unknown
+```
+
+`to_prompt()` is bounded (3 lessons, 3 precedents, ~1k chars) so an intervention
+cannot flood a context window. `context` only *ranks* the history — it never
+filters it away, because a precedent is shown, not searched for.
 
 ### Conflict resolution
 
@@ -163,6 +218,10 @@ three months later) ranked the correct memory *last* from ~65 days on.
 
 p95 recall latency: **4.3 ms** at 5k records, **18 ms** at 20k (down from 189 ms).
 
+A second suite covers the intervention layer — verdict escalation, cross-entity
+transfer, lesson de-duplication, card bounds, and the migration of a database
+written before `action_type` existed: **8/8 cases**.
+
 ## What this is not
 
 Stated plainly, because the gaps are real:
@@ -172,6 +231,10 @@ Stated plainly, because the gaps are real:
   semantic signal; vectors are cached in-process, not persisted.
 - **No synonym matching without an embedder.** `缺货` will not find `断货` — that is
   what the semantic path is for.
+- **The verdict is a heuristic over declared statuses, not a risk model.** It counts
+  what `record_outcome(status=...)` was told; it cannot detect an outcome the caller
+  never recorded, and `high_risk` is a threshold (`≥2 outcomes, ≥50% non-clean`),
+  not a calibrated probability.
 - **No LLM-based importance scoring or extraction.** `WritePolicy.score()` is a
   rule-based placeholder with a documented seam; it does not read content.
 - **Single-process.** SQLite without WAL; concurrent writers from multiple threads
@@ -200,8 +263,11 @@ agent-memory-mcp
 }
 ```
 
-Tools: `remember`, `recall`, `record_outcome`. `recall` returns `why` and `signals`
-with every hit, so the agent can say *why* it brought something up.
+Tools: `before_decision`, `remember`, `recall`, `record_outcome`.
+
+`before_decision` is the one to wire into an agent loop: it returns the verdict,
+the precedents and a ready-to-inject `prompt`. `recall` returns `why` and
+`signals` with every hit, so the agent can say *why* it brought something up.
 
 ## Development
 

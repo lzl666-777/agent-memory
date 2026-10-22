@@ -21,11 +21,11 @@ decision = mem.remember(
     entity="供应商A",
     content="决定把供应商A换成供应商B",
     structured={
-        "decision_type": "supplier_switch",
         "decision": "换成供应商B",
         "rationale": "A 交期延迟、产能不足",
         "context": "3 月因 A 延迟断货两周",
     },
+    action_type="supplier_switch",
     source="session-2026-03-15",
 )
 print(f"已记录决策: {decision.id} | 重要性: {decision.importance:.2f}")
@@ -39,6 +39,7 @@ mem.record_outcome(
     outcome="供应商B 在 6 月断货两周",
     lesson="换供应商前必须先评估备选产能，不能只看交期",
     outcome_at="2026-06-10",
+    status="failure",
 )
 print("已补充结果与教训，重要性提升")
 
@@ -79,3 +80,10 @@ print("场景 5：遗忘预览（事实按 180 天半衰期衰减；决策与历
 print("=" * 60)
 would_forget = mem.forget(dry_run=True)
 print(f"将被遗忘: {len(would_forget)} 条（刚写入的事实还新鲜，决策和历史版本不在遗忘范围内）")
+
+print()
+print("=" * 60)
+print("场景 6（次年）：要换的是另一家供应商 —— 教训会跟着动作走")
+print("=" * 60)
+card = mem.before("supplier_switch", context="要不要把供应商C换成供应商D", entity="供应商C")
+print(card.to_prompt())

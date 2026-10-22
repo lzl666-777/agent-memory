@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.3.0
+
+The library stops being only a search API and becomes an intervention API.
+
+### Added
+
+- `Memory.before(action, context=..., entity=...)` returns a `Precedent`: a verdict
+  (`no_history` / `unverified` / `clear` / `caution` / `high_risk`), the lessons from
+  earlier attempts, the precedents themselves, and a bounded `to_prompt()` card.
+- `action_type` is a first-class indexed field on a decision. `before()` keys on it,
+  so a lesson learned on one entity fires when a *different* entity is about to be
+  treated the same way.
+- `record_outcome(..., status=...)` — `success` / `failure` / `mixed` / `unknown`.
+  Declared and validated; never inferred from free text.
+- `recall(action_type=...)`, and MCP tool `before_decision`.
+
+### Changed
+
+- Schema 3: `action_type` column with an index. Databases written by 0.1/0.2 are
+  altered and backfilled from `structured["action_type"]` on open, and the FTS index
+  is rebuilt once if it predates 0.2.
+- Evaluation gained an 8-case intervention suite (verdicts, cross-entity transfer,
+  lesson de-duplication, card bounds, migration).
+- Retrieval: an optional `floor=False` mode used by `before()` — a precedent is
+  shown, not searched for, so `context` ranks the history instead of filtering it.
+
+### Notes
+
+- Backwards compatible: `action_type` falls back to `structured["action_type"]`, and
+  `record_outcome` without a status still records the outcome (as unclassified).
+- A decision with an outcome but no status is reported as unclassified rather than
+  counted as a success.
+
 ## 0.2.0
 
 Retrieval and forgetting were reworked after measuring that the 0.1 implementation

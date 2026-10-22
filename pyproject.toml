@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-memory"
-version = "0.2.0"
-description = "Decision memory for AI agents: remember what was decided, record what happened, recall lessons before the next decision."
+version = "0.3.0"
+description = "Decision memory for AI agents: record what was decided and what happened, then check the record before repeating a mistake."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
