@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional
 
 from .forgetting import forget as _forget
+from .intervention import OUTCOME_STATUSES, Precedent, build as _build_precedent
 from .models import MemoryRecord, MemoryType
 from .retrieval import RetrievedMemory, Retriever
 from .store import Store
@@ -43,16 +44,24 @@ class Memory:
         importance: Optional[float] = None,
         confidence: float = 1.0,
         source: str = "",
+        action_type: Optional[str] = None,
     ) -> MemoryRecord:
-        """Store a memory, resolving conflicts with existing facts."""
+        """Store a memory, resolving conflicts with existing facts.
+
+        ``action_type`` classifies a decision by *what was done*
+        (``supplier_switch``, ``price_cut``...). It defaults to
+        ``structured["action_type"]`` so older call sites keep working.
+        """
         kind = MemoryType(type)
         structured = dict(structured or {})
+        action = (action_type or structured.get("action_type") or "").strip()
         if importance is None:
             importance = self.policy.score(kind, content, structured)
 
         record = MemoryRecord.create(
             kind, entity, content, structured=structured,
             importance=importance, confidence=confidence, source=source,
+            action_type=action,
         )
         existing = self.policy.find_redundant(self.store, record)
         if existing is not None:
@@ -69,8 +78,14 @@ class Memory:
         outcome: str,
         lesson: Optional[str] = None,
         outcome_at: Optional[str] = None,
+        status: Optional[str] = None,
     ) -> MemoryRecord:
-        """Attach what actually happened to a past decision."""
+        """Attach what actually happened to a past decision.
+
+        ``status`` is one of ``success`` / ``failure`` / ``mixed`` / ``unknown``.
+        It is declared, not inferred: the intervention verdict only counts what
+        the caller classified, so a vague outcome is never mistaken for a win.
+        """
         record = self.store.get(memory_id)
         if record is None:
             raise KeyError(f"memory not found: {memory_id}")
@@ -79,6 +94,13 @@ class Memory:
             record.structured["lesson"] = lesson
         if outcome_at:
             record.structured["outcome_at"] = str(outcome_at)
+        if status is not None:
+            normalized = str(status).strip().lower()
+            if normalized not in OUTCOME_STATUSES:
+                raise ValueError(
+                    "status must be one of %s, got %r" % (", ".join(OUTCOME_STATUSES), status)
+                )
+            record.structured["outcome_status"] = normalized
         # a decision with a known outcome is far more valuable than a bare one
         record.importance = min(1.0, record.importance + 0.15)
         self.store.update(record)
@@ -94,11 +116,30 @@ class Memory:
         types: Optional[List[str]] = None,
         top_k: int = 5,
         include_history: bool = False,
+        action_type: Optional[str] = None,
     ) -> List[RetrievedMemory]:
         return self.retriever.recall(
             entity=entity, query=query, types=types,
             top_k=top_k, include_history=include_history,
+            action_type=action_type,
         )
+
+    def before(
+        self,
+        action: str,
+        context: Optional[str] = None,
+        entity: Optional[str] = None,
+        top_k: int = 3,
+    ) -> Precedent:
+        """Check the record of an action class *before* the agent commits to it.
+
+        This is the difference between "search my memory" and "stop me from
+        repeating a mistake": the lookup is keyed on ``action``, so a lesson
+        learned on another entity still applies. ``context`` only ranks the
+        history, it never filters it away. ``entity`` is context for the card,
+        not a filter -- transferring the lesson is the point.
+        """
+        return _build_precedent(self, action, context=context, entity=entity, top_k=top_k)
 
     def get(self, memory_id: str) -> Optional[MemoryRecord]:
         return self.store.get(memory_id)

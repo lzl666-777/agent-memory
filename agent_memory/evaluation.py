@@ -216,8 +216,123 @@ CASES: List[Dict[str, Any]] = [
 
 
 # ---------------------------------------------------------------------- #
-# seeding
+# intervention ("what happened last time we did this?")
 # ---------------------------------------------------------------------- #
+#: Each case answers one question: given this history, is the card correct?
+#: Note that the setup entity and the entity asked about differ where it matters:
+#: a lesson is keyed on the action, not on the supplier it happened to.
+INTERVENTION_CASES: List[Dict[str, Any]] = [
+    dict(
+        name="跨实体教训可见：B 的坑在 C 上仍然报警",
+        setup=[dict(
+            type="decision", entity="供应商B", action_type="supplier_switch",
+            content="决定更换供应商：把供应商B换成供应商C",
+            structured=dict(decision="换成供应商C"),
+            outcome=dict(outcome="供应商C 断货两周", lesson="换供应商前先评估备选产能", status="failure"),
+            age_days=120,
+        )],
+        action="supplier_switch",
+        entity="供应商A",
+        # context shares no vocabulary with the record: a precedent is shown,
+        # not searched for, so it must still come back.
+        context="价格更便宜",
+        expect=dict(verdict="caution", attempts=1, failures=1,
+                    lesson_contains="先评估备选产能", precedent_entity="供应商B",
+                    precedent_count_min=1),
+    ),
+    dict(
+        name="失败占多数升级为 high_risk",
+        setup=[
+            dict(type="decision", entity="供应商B", action_type="supplier_switch",
+                 content="决定换成供应商C", structured=dict(decision="换C"),
+                 outcome=dict(outcome="C 断货", status="failure"), age_days=200),
+            dict(type="decision", entity="供应商D", action_type="supplier_switch",
+                 content="决定换成供应商E", structured=dict(decision="换E"),
+                 outcome=dict(outcome="E 涨价 20%", status="failure"), age_days=100),
+            dict(type="decision", entity="供应商F", action_type="supplier_switch",
+                 content="决定换成供应商G", structured=dict(decision="换G"),
+                 outcome=dict(outcome="交付正常", status="success"), age_days=50),
+        ],
+        action="supplier_switch",
+        context="要不要把供应商A换成供应商B",
+        expect=dict(verdict="high_risk", attempts=3, failures=2, successes=1,
+                    prompt_contains=["HIGH_RISK", "2 failed"], needs_attention=True),
+    ),
+    dict(
+        name="没有历史时明确说没有",
+        setup=[],
+        action="price_cut",
+        context="要不要降价 5%",
+        expect=dict(verdict="no_history", attempts=0, needs_attention=False),
+    ),
+    dict(
+        name="只成功不报警",
+        setup=[
+            dict(type="decision", entity="供应商A", action_type="supplier_switch",
+                 content="决定换成供应商B", structured=dict(decision="换B"),
+                 outcome=dict(outcome="交付正常", status="success"), age_days=60),
+            dict(type="decision", entity="供应商C", action_type="supplier_switch",
+                 content="决定换成供应商D", structured=dict(decision="换D"),
+                 outcome=dict(outcome="成本下降", status="success"), age_days=30),
+        ],
+        action="supplier_switch",
+        context="要不要换供应商",
+        expect=dict(verdict="clear", failures=0, successes=2, needs_attention=False),
+    ),
+    dict(
+        name="有决策但无结果时标为 unverified",
+        setup=[dict(type="decision", entity="供应商A", action_type="price_cut",
+                    content="决定降价 5%", structured=dict(decision="降5%"), age_days=10)],
+        action="price_cut",
+        context="要不要降价",
+        expect=dict(verdict="unverified", attempts=0),
+    ),
+    dict(
+        name="不同动作不串味",
+        setup=[dict(type="decision", entity="供应商A", action_type="supplier_switch",
+                    content="决定换成供应商B", structured=dict(decision="换B"),
+                    outcome=dict(outcome="断货", lesson="先评估产能", status="failure"), age_days=90)],
+        action="price_cut",
+        context="要不要降价",
+        expect=dict(verdict="no_history", attempts=0),
+    ),
+    dict(
+        name="教训去重",
+        setup=[
+            dict(type="decision", entity="供应商B", action_type="supplier_switch",
+                 content="决定换成供应商C", structured=dict(decision="换C"),
+                 outcome=dict(outcome="断货", lesson="先评估备选产能", status="failure"), age_days=300),
+            dict(type="decision", entity="供应商D", action_type="supplier_switch",
+                 content="决定换成供应商E", structured=dict(decision="换E"),
+                 outcome=dict(outcome="断货", lesson="先评估备选产能", status="failure"), age_days=200),
+            dict(type="decision", entity="供应商F", action_type="supplier_switch",
+                 content="决定换成供应商G", structured=dict(decision="换G"),
+                 outcome=dict(outcome="断货", lesson="先评估备选产能", status="failure"), age_days=100),
+        ],
+        action="supplier_switch",
+        context="要不要换供应商",
+        expect=dict(verdict="high_risk", lesson_count=1),
+    ),
+    dict(
+        name="卡片可直接注入提示词且长度有界",
+        setup=[dict(type="decision", entity="供应商B", action_type="supplier_switch",
+                    content="决定更换供应商：把供应商B换成供应商C" + "，细节" * 40,
+                    structured=dict(decision="换成供应商C"),
+                    outcome=dict(outcome="C 断货两周", lesson="换供应商前先评估备选产能",
+                                 status="failure"), age_days=120)],
+        action="supplier_switch",
+        context="要不要换供应商",
+        expect=dict(verdict="caution",
+                    prompt_contains=["PRECEDENT CHECK", "supplier_switch", "先评估备选产能",
+                                     "Before acting"],
+                    prompt_max_len=1200),
+    ),
+]
+
+
+# ---------------------------------------------------------------------- #
+# seeding
+# ----------------------------------------------------------------------#
 def _age(mem: Memory, rec_id: str, days: float) -> None:
     if not days:
         return
@@ -380,6 +495,81 @@ def _evaluate(
     return {"results": results, **_summarise(results)}
 
 
+# ---------------------------------------------------------------------- #
+# intervention runner
+# ---------------------------------------------------------------------- #
+def run_intervention_case(case: Dict[str, Any], memory_factory=None):
+    """Seed the case history, then ask for a precedent check."""
+    mem = memory_factory() if memory_factory else Memory(":memory:")
+    try:
+        for item in case.get("setup", []):
+            rec = mem.remember(
+                type=item["type"],
+                entity=item["entity"],
+                content=item["content"],
+                structured=dict(item.get("structured") or {}),
+                action_type=item.get("action_type"),
+            )
+            _age(mem, rec.id, item.get("age_days", 0))
+            if item.get("outcome"):
+                mem.record_outcome(rec.id, **item["outcome"])
+        return mem.before(case["action"], context=case.get("context"), entity=case.get("entity"))
+    finally:
+        mem.close()
+
+
+def _judge_intervention(precedent, expect: Dict[str, Any]) -> bool:
+    if "verdict" in expect and precedent.verdict != expect["verdict"]:
+        return False
+    if "attempts" in expect and precedent.attempts != expect["attempts"]:
+        return False
+    if "failures" in expect and precedent.failures != expect["failures"]:
+        return False
+    if "successes" in expect and precedent.successes != expect["successes"]:
+        return False
+    if "needs_attention" in expect and precedent.needs_attention != expect["needs_attention"]:
+        return False
+    if "lesson_contains" in expect:
+        if not any(expect["lesson_contains"] in lesson for lesson in precedent.lessons):
+            return False
+    if "lesson_count" in expect and len(precedent.lessons) != expect["lesson_count"]:
+        return False
+
+    payload = precedent.to_dict()
+    if "precedent_entity" in expect:
+        if not payload["precedents"] or payload["precedents"][0]["entity"] != expect["precedent_entity"]:
+            return False
+    if "precedent_count_min" in expect:
+        if len(payload["precedents"]) < expect["precedent_count_min"]:
+            return False
+    if "prompt_contains" in expect:
+        if any(token not in payload["prompt"] for token in expect["prompt_contains"]):
+            return False
+    if "prompt_max_len" in expect and len(payload["prompt"]) > expect["prompt_max_len"]:
+        return False
+    return True
+
+
+def run_intervention_eval(memory_factory=None) -> Dict[str, Any]:
+    results = []
+    for case in INTERVENTION_CASES:
+        try:
+            precedent = run_intervention_case(case, memory_factory)
+            passed, error = _judge_intervention(precedent, case["expect"]), None
+        except Exception as exc:
+            passed, error = False, repr(exc)
+        results.append({"name": case["name"], "passed": bool(passed), "error": error})
+
+    total = len(results)
+    passed = sum(1 for result in results if result["passed"])
+    return {
+        "total": total,
+        "passed": passed,
+        "accuracy": round(passed / total * 100, 1) if total else 0.0,
+        "results": results,
+    }
+
+
 def latency_p95(memory_factory: Optional[Callable[[], Memory]] = None,
                 n: int = 5000, runs: int = 50) -> Optional[float]:
     """p95 recall latency over ``n`` records (200 entities, 25 records each)."""
@@ -413,10 +603,12 @@ def run_eval(
     memory_factory: Optional[Callable[[], Memory]] = None,
     include_baselines: bool = True,
     latency: bool = True,
+    intervention: bool = True,
 ) -> Dict[str, Any]:
     """Run every case against a fresh in-memory store."""
     report = _evaluate(memory_factory)
     report["p95_latency_ms"] = latency_p95(memory_factory) if latency else None
+    report["intervention"] = run_intervention_eval(memory_factory) if intervention else None
 
     if include_baselines:
         report["baselines"] = {
@@ -450,6 +642,14 @@ def _print_report(report: Dict[str, Any]) -> None:
             print("%-16s %-12s %-8s %-10s" % (
                 name, "%.1f%%" % base["recall_at_5"], "%.3f" % base["mrr"],
                 "%d/%d" % (base["negatives_passed"], base["negatives_total"])))
+
+    if report.get("intervention"):
+        block = report["intervention"]
+        print()
+        print("intervention (before-the-decision cards): %d/%d passed" % (
+            block["passed"], block["total"]))
+        for item in block["results"]:
+            print(("PASS  " if item["passed"] else "FAIL  ") + item["name"])
 
 
 if __name__ == "__main__":

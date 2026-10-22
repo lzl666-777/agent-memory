@@ -7,6 +7,10 @@ Two details carry most of the retrieval quality and are easy to get wrong:
   lexical path into a duplicate of the structured path.
 * the FTS query is ordered by ``bm25()``. Without an ``ORDER BY`` SQLite returns
   rows in rowid order, i.e. the "ranking" is insertion order.
+
+``action_type`` is a real column with an index: it is the axis the intervention
+API queries on ("what happened last time we switched a supplier"), and it must
+work across entities.
 """
 
 from __future__ import annotations
@@ -14,12 +18,19 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 from .models import MemoryRecord, MemoryType, from_iso, to_iso, utcnow
 
-#: Bumped whenever the FTS layout changes; old databases are re-indexed once.
-SCHEMA_VERSION = 2
+#: Bumped when the table layout changes; old databases are migrated on open.
+SCHEMA_VERSION = 3
+#: Bumped when the FTS layout changes; older databases are re-indexed once.
+FTS_VERSION = 2
+
+_COLUMNS = (
+    "id,type,entity,content,structured,action_type,valid_from,valid_to,"
+    "superseded_by,importance,confidence,access_count,last_accessed,source,created_at"
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS memories (
@@ -28,6 +39,7 @@ CREATE TABLE IF NOT EXISTS memories (
     entity TEXT NOT NULL,
     content TEXT NOT NULL,
     structured TEXT NOT NULL,
+    action_type TEXT NOT NULL DEFAULT '',
     valid_from TEXT NOT NULL,
     valid_to TEXT,
     superseded_by TEXT,
@@ -42,6 +54,9 @@ CREATE INDEX IF NOT EXISTS idx_mem_entity ON memories(entity);
 CREATE INDEX IF NOT EXISTS idx_mem_type ON memories(type);
 CREATE INDEX IF NOT EXISTS idx_mem_valid ON memories(valid_to);
 """
+# NB: the index on `action_type` is created in ``_ensure_columns``, not here --
+# on a database from before 0.3 the column does not exist yet and a CREATE INDEX
+# in this script would abort the migration before it could add it.
 
 #: Lexical matching needs at least three characters: the trigram tokenizer has
 #: no tokens for shorter input, and CJK terms like "断货" / "交期" are two.
@@ -62,21 +77,56 @@ class Store:
         self.conn.executescript(_SCHEMA)
         self.fts_enabled = False
         self.fts_tokenizer: Optional[str] = None
-        self._init_fts()
+        version = self._get_version()
+        self._ensure_columns()
+        self._init_fts(version)
+        self._set_version(SCHEMA_VERSION)
         self.conn.commit()
 
     # ------------------------------------------------------------------ #
     # schema / migration
     # ------------------------------------------------------------------ #
-    def _init_fts(self) -> None:
+    def _get_version(self) -> int:
+        return int(self.conn.execute("PRAGMA user_version").fetchone()[0])
+
+    def _set_version(self, version: int) -> None:
+        self.conn.execute("PRAGMA user_version = %d" % version)
+
+    def _ensure_columns(self) -> None:
+        """Add ``action_type`` to databases created before 0.3."""
+        columns = {row[1] for row in self.conn.execute("PRAGMA table_info(memories)")}
+        if "action_type" not in columns:
+            self.conn.execute(
+                "ALTER TABLE memories ADD COLUMN action_type TEXT NOT NULL DEFAULT ''"
+            )
+            self._backfill_action_type()
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_mem_action ON memories(action_type)"
+        )
+
+    def _backfill_action_type(self) -> None:
+        """Pull the value out of ``structured`` for rows written by 0.1/0.2."""
+        rows = self.conn.execute("SELECT id, structured FROM memories").fetchall()
+        updates = []
+        for row in rows:
+            try:
+                structured = json.loads(row["structured"] or "{}")
+            except (TypeError, ValueError):  # pragma: no cover - corrupt row
+                continue
+            action = (structured.get("action_type") or "").strip()
+            if action:
+                updates.append((action, row["id"]))
+        if updates:
+            self.conn.executemany("UPDATE memories SET action_type = ? WHERE id = ?", updates)
+
+    def _init_fts(self, version: int) -> None:
         """Create (or rebuild) the FTS index, keeping old databases working."""
-        version = self.conn.execute("PRAGMA user_version").fetchone()[0]
         existed = self.conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memories_fts'"
         ).fetchone() is not None
 
         rebuild = False
-        if existed and version < SCHEMA_VERSION:
+        if existed and version < FTS_VERSION:
             # Older layout indexed `entity`, which poisons lexical recall.
             self.conn.execute("DROP TABLE memories_fts")
             existed, rebuild = False, True
@@ -97,7 +147,6 @@ class Store:
 
         if self.fts_enabled and (rebuild or not existed):
             self._rebuild_fts()
-        self.conn.execute("PRAGMA user_version = %d" % SCHEMA_VERSION)
 
     def _rebuild_fts(self) -> None:
         self.conn.execute(
@@ -112,16 +161,15 @@ class Store:
     def _values(rec: MemoryRecord) -> tuple:
         return (
             rec.id, rec.type.value, rec.entity, rec.content,
-            json.dumps(rec.structured, ensure_ascii=False),
+            json.dumps(rec.structured, ensure_ascii=False), rec.action_type,
             to_iso(rec.valid_from), to_iso(rec.valid_to), rec.superseded_by,
             rec.importance, rec.confidence, rec.access_count,
             to_iso(rec.last_accessed), rec.source, to_iso(rec.created_at),
         )
 
     _INSERT_SQL = (
-        "INSERT INTO memories (id,type,entity,content,structured,valid_from,"
-        "valid_to,superseded_by,importance,confidence,access_count,"
-        "last_accessed,source,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        "INSERT INTO memories (" + _COLUMNS + ") "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
     )
 
     def insert(self, rec: MemoryRecord) -> None:
@@ -143,12 +191,12 @@ class Store:
 
     def update(self, rec: MemoryRecord) -> None:
         self.conn.execute(
-            "UPDATE memories SET type=?,entity=?,content=?,structured=?,"
+            "UPDATE memories SET type=?,entity=?,content=?,structured=?,action_type=?,"
             "valid_from=?,valid_to=?,superseded_by=?,importance=?,confidence=?,"
             "access_count=?,last_accessed=?,source=? WHERE id=?",
             (
                 rec.type.value, rec.entity, rec.content,
-                json.dumps(rec.structured, ensure_ascii=False),
+                json.dumps(rec.structured, ensure_ascii=False), rec.action_type,
                 to_iso(rec.valid_from), to_iso(rec.valid_to), rec.superseded_by,
                 rec.importance, rec.confidence, rec.access_count,
                 to_iso(rec.last_accessed), rec.source, rec.id,
@@ -214,11 +262,15 @@ class Store:
         entity: Optional[str] = None,
         types: Optional[List[str]] = None,
         include_history: bool = False,
+        action_type: Optional[str] = None,
     ) -> List[MemoryRecord]:
         clauses, params = [], []
         if entity:
             clauses.append("entity = ?")
             params.append(entity)
+        if action_type:
+            clauses.append("action_type = ?")
+            params.append(action_type)
         if types:
             values = [MemoryType(t).value for t in types]
             clauses.append("type IN (" + ",".join("?" for _ in values) + ")")
@@ -311,6 +363,7 @@ class Store:
             entity=row["entity"],
             content=row["content"],
             structured=json.loads(row["structured"] or "{}"),
+            action_type=row["action_type"] or "",
             valid_from=from_iso(row["valid_from"]),
             valid_to=from_iso(row["valid_to"]),
             superseded_by=row["superseded_by"],

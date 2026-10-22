@@ -18,17 +18,20 @@ the next decision::
         print(hit.score, hit.why, hit.record.structured.get("lesson"))
 """
 
+from .intervention import OUTCOME_STATUSES, Precedent
 from .memory import Memory
 from .models import MemoryRecord, MemoryType
 from .retrieval import RetrievedMemory
 from .store import Store
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "Memory",
     "MemoryRecord",
     "MemoryType",
+    "Precedent",
+    "OUTCOME_STATUSES",
     "Store",
     "RetrievedMemory",
     "__version__",

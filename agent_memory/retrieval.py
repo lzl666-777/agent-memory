@@ -126,6 +126,8 @@ class Retriever:
         types: Optional[List[str]] = None,
         top_k: int = 5,
         include_history: bool = False,
+        action_type: Optional[str] = None,
+        floor: bool = True,
     ) -> List[RetrievedMemory]:
         query = (query or "").strip()
         allowed = {MemoryType(t) for t in types} if types else None
@@ -133,9 +135,12 @@ class Retriever:
         candidates: Dict[str, MemoryRecord] = {}
         reasons: Dict[str, List[str]] = {}
 
-        # scope path: entity / type / validity
-        if entity or allowed:
-            for rec in self.store.query(entity=entity, types=types, include_history=include_history):
+        # scope path: entity / action / type / validity
+        if entity or allowed or action_type:
+            for rec in self.store.query(
+                entity=entity, types=types, include_history=include_history,
+                action_type=action_type,
+            ):
                 if allowed and rec.type not in allowed:
                     continue
                 candidates[rec.id] = rec
@@ -147,6 +152,8 @@ class Retriever:
             for rec, raw in self.store.search_fts_scored(query, entity=entity):
                 if allowed and rec.type not in allowed:
                     continue
+                if action_type and rec.action_type != action_type:
+                    continue
                 if not include_history and not rec.is_current:
                     continue
                 candidates[rec.id] = rec
@@ -156,9 +163,11 @@ class Retriever:
         # semantic path: opt-in, in-process vector cache
         semantic: Dict[str, float] = {}
         if self.embedder and query:
-            semantic = self._semantic_scores(query, candidates, entity, types, include_history)
+            semantic = self._semantic_scores(
+                query, candidates, entity, types, include_history, action_type
+            )
 
-        if query and self.RELEVANCE_FLOOR:
+        if query and floor and self.RELEVANCE_FLOOR:
             candidates = {
                 rid: rec for rid, rec in candidates.items()
                 if rid in lexical_raw or semantic.get(rid, 0.0) >= self.SEMANTIC_FLOOR
@@ -268,6 +277,7 @@ class Retriever:
     def _semantic_scores(
         self, query: str, candidates: Dict[str, MemoryRecord],
         entity: Optional[str], types: Optional[List[str]], include_history: bool,
+        action_type: Optional[str] = None,
     ) -> Dict[str, float]:
         try:
             query_vec = self.embedder(query)
@@ -276,7 +286,10 @@ class Retriever:
         pool = dict(candidates)
         if not pool:
             # semantic-only search: no scope was given, so scan (bounded)
-            for rec in self.store.query(entity=entity, types=types, include_history=include_history):
+            for rec in self.store.query(
+                entity=entity, types=types, include_history=include_history,
+                action_type=action_type,
+            ):
                 pool[rec.id] = rec
         scores: Dict[str, float] = {}
         for rid, rec in pool.items():

@@ -46,7 +46,13 @@ class MemoryRecord:
         episode  -> {"event": "...", "impact": "...", "at": "2026-03-15"}
         decision -> {"decision_type": "...", "decision": "...",
                      "rationale": "...", "context": "...",
-                     "outcome": "...", "lesson": "...", "outcome_at": "..."}
+                     "outcome": "...", "lesson": "...", "outcome_at": "...",
+                     "outcome_status": "success" | "failure" | "mixed" | "unknown"}
+
+    ``action_type`` is what makes a lesson transferable: "we switched supplier B
+    and it stock-outed" is about the *action* ``supplier_switch``, not about
+    supplier B. It is a column (and an index) because it is the axis the
+    intervention API queries on.
     """
 
     id: str
@@ -54,6 +60,7 @@ class MemoryRecord:
     entity: str
     content: str
     structured: Dict[str, Any] = field(default_factory=dict)
+    action_type: str = ""
 
     # temporal validity: when this memory became true, and when it stopped
     valid_from: datetime = field(default_factory=utcnow)
@@ -81,6 +88,7 @@ class MemoryRecord:
         importance: float = 0.5,
         confidence: float = 1.0,
         source: str = "",
+        action_type: str = "",
     ) -> "MemoryRecord":
         return cls(
             id=uuid.uuid4().hex[:12],
@@ -88,6 +96,7 @@ class MemoryRecord:
             entity=entity.strip(),
             content=content.strip(),
             structured=dict(structured or {}),
+            action_type=(action_type or "").strip(),
             importance=float(importance),
             confidence=float(confidence),
             source=source,
@@ -111,6 +120,7 @@ class MemoryRecord:
             "entity": self.entity,
             "content": self.content,
             "structured": self.structured,
+            "action_type": self.action_type,
             "valid_from": to_iso(self.valid_from),
             "valid_to": to_iso(self.valid_to),
             "superseded_by": self.superseded_by,
