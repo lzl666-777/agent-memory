@@ -100,6 +100,54 @@ def test_successes_do_not_warn():
     mem.close()
 
 
+def test_unclassified_outcomes_are_not_clear():
+    """An outcome with no declared status is not evidence of success."""
+    mem = Memory(":memory:")
+    for index in range(2):
+        rec = mem.remember(
+            type="decision", entity="供应商%d" % index, content="决定降价",
+            structured={"decision": "降5%"}, action_type="price_cut",
+        )
+        mem.record_outcome(rec.id, outcome="结果未知", status="unknown")
+    card = mem.before("price_cut")
+    assert card.verdict == "unverified"
+    assert card.attempts == 2
+    assert "UNVERIFIED" in card.to_prompt()
+    assert "unclassified" in card.to_prompt()
+    mem.close()
+
+
+def test_card_total_length_is_bounded():
+    from agent_memory.intervention import MAX_PROMPT_CHARS
+
+    mem = Memory(":memory:")
+    for index in range(3):
+        rec = mem.remember(
+            type="decision", entity=("供应商%d" % index) * 20,
+            content="决定更换供应商" * 30,
+            structured={"decision": "换成" + ("很长的决策" * 40)},
+            action_type="supplier_switch",
+        )
+        mem.record_outcome(
+            rec.id, outcome="断货" * 100,
+            lesson=("先评估产能%d" % index) * 30, status="failure",
+        )
+    card = mem.before("supplier_switch")
+    assert len(card.to_prompt()) <= MAX_PROMPT_CHARS
+    mem.close()
+
+
+def test_record_outcome_rejects_non_decision():
+    mem = Memory(":memory:")
+    fact = mem.remember(
+        type="fact", entity="供应商A", content="交期 45 天",
+        structured={"key": "lead_time_days", "value": 45},
+    )
+    with pytest.raises(ValueError):
+        mem.record_outcome(fact.id, outcome="延迟", status="failure")
+    mem.close()
+
+
 def test_decision_without_outcome_is_unverified():
     mem = Memory(":memory:")
     mem.remember(type="decision", entity="供应商A", content="决定降价 5%",

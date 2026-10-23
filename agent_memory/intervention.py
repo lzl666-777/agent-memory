@@ -46,6 +46,9 @@ _VERDICT_ORDER = {
 MAX_LESSONS = 3
 MAX_PRECEDENTS = 3
 MAX_TEXT = 180
+#: Hard cap for the whole card. Per-field clipping alone still lets 3 lessons
+#: and 3 precedents add up to ~1.8k characters.
+MAX_PROMPT_CHARS = 1200
 
 
 @dataclass
@@ -104,17 +107,29 @@ class Precedent:
         """A ready-to-inject card. Bounded so it cannot flood the context."""
         head = "PRECEDENT CHECK · %s" % (self.action_type or "(unspecified action)")
         if self.verdict == "no_history":
-            return (
+            return _fit(
                 head + "\n"
                 "verdict: NO HISTORY — no decision of this kind has been recorded yet.\n"
                 "No constraint from memory. Consider recording the outcome afterwards."
             )
         if self.verdict == "unverified":
-            return (
+            if self.attempts:
+                classified = self.successes + self.failures + self.mixed
+                unclassified = self.attempts - classified
+                if unclassified:
+                    detail = (
+                        "%d recorded outcome%s, %d unclassified"
+                        % (self.attempts, "" if self.attempts == 1 else "s", unclassified)
+                    )
+                else:
+                    detail = "no clean classification"
+            else:
+                detail = "no recorded outcome yet"
+            return _fit(
                 head + "\n"
-                "verdict: UNVERIFIED — %d decision%s of this kind, no recorded outcome yet.\n"
+                "verdict: UNVERIFIED — %d decision%s of this kind; %s.\n"
                 "Rationale on file, but nothing learned from it. Treat as weak evidence."
-                % (len(self.records), "" if len(self.records) == 1 else "s")
+                % (len(self.records), "" if len(self.records) == 1 else "s", detail)
             )
 
         lines = [head, "verdict: %s — %s" % (self.verdict.upper(), self._summary())]
@@ -135,7 +150,7 @@ class Precedent:
                 lines.append("     -> %s (%s)" % (_clip(str(outcome), MAX_TEXT), status))
         if self.needs_attention:
             lines.append("Before acting: say how each failure mode above is avoided or accepted.")
-        return "\n".join(lines)
+        return _fit("\n".join(lines))
 
     # ------------------------------------------------------------------ #
     def _summary(self) -> str:
@@ -225,7 +240,16 @@ def _verdict(
     if not executed:
         return "unverified"
     if not failures and not mixed:
-        return "clear"
+        successes = [
+            rec for rec in executed
+            if rec.structured.get("outcome_status") == "success"
+        ]
+        # An outcome without a declared status is not evidence of success.
+        # ``clear`` requires that every recorded outcome was classified clean;
+        # a set of only "unknown" outcomes must stay unverified.
+        if successes and len(successes) == len(executed):
+            return "clear"
+        return "unverified"
     bad = len(failures) + len(mixed)
     if len(executed) >= MIN_ATTEMPTS_FOR_RATE and bad / len(executed) >= HIGH_RISK_SHARE:
         return "high_risk"
@@ -265,3 +289,8 @@ def _month(rec: MemoryRecord) -> str:
 def _clip(text: str, limit: int) -> str:
     text = " ".join(str(text).split())
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _fit(text: str) -> str:
+    """Enforce the whole-card budget after all sections are assembled."""
+    return text if len(text) <= MAX_PROMPT_CHARS else text[: MAX_PROMPT_CHARS - 1] + "…"

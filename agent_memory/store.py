@@ -290,14 +290,20 @@ class Store:
         query: str,
         limit: int = 200,
         entity: Optional[str] = None,
+        include_history: bool = True,
     ) -> List[Tuple[MemoryRecord, float]]:
-        """Return ``(record, bm25)`` ordered by relevance (lower bm25 is better)."""
+        """Return ``(record, bm25)`` ordered by relevance (lower bm25 is better).
+
+        ``include_history=False`` filters superseded rows in SQL, before the
+        limit. Filtering after the limit lets 200 old versions of a fact crowd
+        the current row out of the result set entirely.
+        """
         if not (query or "").strip():
             return []
         if self._needs_like(query):
-            return self._search_like(query, limit, entity)
+            return self._search_like(query, limit, entity, include_history)
         if not self.fts_enabled:  # pragma: no cover - no fts5 available
-            return self._search_like(query, limit, entity)
+            return self._search_like(query, limit, entity, include_history)
         try:
             sql = (
                 "SELECT m.*, bm25(memories_fts) AS _bm25 FROM memories_fts f "
@@ -307,15 +313,27 @@ class Store:
             if entity:
                 sql += " AND f.entity = ?"
                 params.append(entity)
+            if not include_history:
+                sql += " AND m.valid_to IS NULL"
             sql += " ORDER BY _bm25 LIMIT ?"
             params.append(limit)
             rows = self.conn.execute(sql, params).fetchall()
         except sqlite3.OperationalError:  # pragma: no cover - malformed match
-            return self._search_like(query, limit, entity)
+            return self._search_like(query, limit, entity, include_history)
         return [(self._row(r), float(r["_bm25"])) for r in rows]
 
-    def search_fts(self, query: str, limit: int = 200, entity: Optional[str] = None) -> List[MemoryRecord]:
-        return [rec for rec, _ in self.search_fts_scored(query, limit, entity)]
+    def search_fts(
+        self,
+        query: str,
+        limit: int = 200,
+        entity: Optional[str] = None,
+        include_history: bool = True,
+    ) -> List[MemoryRecord]:
+        return [
+            rec for rec, _ in self.search_fts_scored(
+                query, limit, entity, include_history=include_history,
+            )
+        ]
 
     @staticmethod
     def _needs_like(text: str) -> bool:
@@ -323,6 +341,7 @@ class Store:
 
     def _search_like(
         self, query: str, limit: int, entity: Optional[str],
+        include_history: bool = True,
     ) -> List[Tuple[MemoryRecord, float]]:
         needle = query.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         sql = "SELECT * FROM memories WHERE content LIKE ? ESCAPE '\\'"
@@ -330,6 +349,8 @@ class Store:
         if entity:
             sql += " AND entity = ?"
             params.append(entity)
+        if not include_history:
+            sql += " AND valid_to IS NULL"
         sql += " LIMIT ?"
         params.append(limit)
         return [(self._row(r), -_LIKE_EVIDENCE) for r in self.conn.execute(sql, params).fetchall()]

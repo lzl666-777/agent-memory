@@ -87,3 +87,17 @@ print("场景 6（次年）：要换的是另一家供应商 —— 教训会跟
 print("=" * 60)
 card = mem.before("supplier_switch", context="要不要把供应商C换成供应商D", entity="供应商C")
 print(card.to_prompt())
+
+print()
+print("=" * 60)
+print("场景 7：把一段运营对话丢进去，自动抽取记忆")
+print("=" * 60)
+from agent_memory.extract import RuleExtractor
+
+created = mem.remember_from_text(
+    "供应商E 交期 60 天，决定先小批量试单，结果 5 月延迟发货一周",
+    extractor=RuleExtractor("供应商E"),
+    source="session-2026-10-20",
+)
+for record in created:
+    print(f"  [{record.type.value}] {record.content}")

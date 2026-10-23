@@ -216,6 +216,50 @@ CASES: List[Dict[str, Any]] = [
 
 
 # ---------------------------------------------------------------------- #
+# held-out cases
+# ---------------------------------------------------------------------- #
+#: Authored after the tuning set, with the same entity and realistic
+#: distractors.  They are deliberately *not* used by ``run_eval``; run them with
+#: ``run_holdout`` to see whether the ranking generalises beyond the tuning set.
+HELDOUT_CASES: List[Dict[str, Any]] = [
+    dict(
+        name="held-out: same-term wrong action distractor",
+        target=dict(
+            type="decision",
+            content="决定更换供应商：把供应商A换成供应商K",
+            structured=dict(decision="换K", outcome="K 断货", lesson="先评估产能"),
+            age_days=30,
+        ),
+        extras=[dict(
+            type="decision",
+            content="决定更换包装供应商：把纸箱厂换成新厂",
+            structured=dict(decision="换纸箱厂", outcome="包装延迟", lesson="包装别乱换"),
+            age_days=0,
+        )],
+        query=dict(entity=ENTITY, query="更换供应商", types=["decision"]),
+        max_rank=1,
+    ),
+    dict(
+        name="held-out: old lesson beats recent outcome without lesson",
+        target=dict(
+            type="decision",
+            content="决定更换供应商：把供应商A换成供应商B",
+            structured=dict(decision="换B", outcome="B 断货", lesson="先评估产能"),
+            age_days=730,
+        ),
+        extras=[dict(
+            type="decision",
+            content="决定更换供应商：把供应商A换成供应商C",
+            structured=dict(decision="换C", outcome="C 正常"),
+            age_days=0,
+        )],
+        query=dict(entity=ENTITY, query="更换供应商", types=["decision"]),
+        max_rank=1,
+    ),
+]
+
+
+# ---------------------------------------------------------------------- #
 # intervention ("what happened last time we did this?")
 # ---------------------------------------------------------------------- #
 #: Each case answers one question: given this history, is the card correct?
@@ -472,6 +516,7 @@ def _summarise(results: List[Dict[str, Any]]) -> Dict[str, Any]:
 def _evaluate(
     memory_factory: Optional[Callable[[], Memory]],
     retriever_factory: Optional[Callable[[Any], Retriever]] = None,
+    cases: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     def _make() -> Memory:
         mem = memory_factory() if memory_factory else Memory(":memory:")
@@ -480,7 +525,7 @@ def _evaluate(
         return mem
 
     results = []
-    for case in CASES:
+    for case in (cases if cases is not None else CASES):
         try:
             passed, rank, error = run_case(case, _make)
         except Exception as exc:  # a broken case must fail loudly, not crash the run
@@ -597,6 +642,11 @@ def latency_p95(memory_factory: Optional[Callable[[], Memory]] = None,
         return round(samples[max(0, int(len(samples) * 0.95) - 1)], 2)
     finally:
         mem.close()
+
+
+def run_holdout(memory_factory: Optional[Callable[[], Memory]] = None) -> Dict[str, Any]:
+    """Run the held-out cases only (no baselines, no latency, no intervention)."""
+    return _evaluate(memory_factory, cases=HELDOUT_CASES)
 
 
 def run_eval(

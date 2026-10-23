@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional
 
+from .extract import Extractor, RuleExtractor
 from .forgetting import forget as _forget
 from .intervention import OUTCOME_STATUSES, Precedent, build as _build_precedent
 from .models import MemoryRecord, MemoryType
@@ -72,6 +73,35 @@ class Memory:
             self.policy.supersede(self.store, old, record)
         return record
 
+    def remember_from_text(
+        self,
+        text: str,
+        extractor: Optional[Extractor] = None,
+        source: str = "",
+    ) -> List[MemoryRecord]:
+        """Extract memories from free text and store them.
+
+        Defaults to :class:`agent_memory.extract.RuleExtractor` (zero
+        dependency). Pass an :class:`agent_memory.extract.LLMExtractor` for
+        much higher recall::
+
+            mem.remember_from_text(conversation, extractor=LLMExtractor(complete))
+        """
+        extractor = extractor or RuleExtractor()
+        created: List[MemoryRecord] = []
+        for item in extractor.extract(text):
+            created.append(
+                self.remember(
+                    type=item["type"],
+                    entity=item["entity"],
+                    content=item["content"],
+                    structured=item.get("structured"),
+                    action_type=item.get("action_type"),
+                    source=source,
+                )
+            )
+        return created
+
     def record_outcome(
         self,
         memory_id: str,
@@ -89,6 +119,11 @@ class Memory:
         record = self.store.get(memory_id)
         if record is None:
             raise KeyError(f"memory not found: {memory_id}")
+        if record.type is not MemoryType.DECISION:
+            raise ValueError(
+                "record_outcome only applies to decision memories; %s is a %s"
+                % (record.id, record.type.value)
+            )
         record.structured["outcome"] = outcome
         if lesson:
             record.structured["lesson"] = lesson

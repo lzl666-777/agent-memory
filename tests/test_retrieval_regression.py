@@ -7,7 +7,8 @@ had and that the 12-case evaluation could not see.
 import pytest
 
 from agent_memory import Memory
-from agent_memory.evaluation import run_eval
+from agent_memory.evaluation import run_eval, run_holdout
+from agent_memory.extract import RuleExtractor
 from agent_memory.models import utcnow
 from agent_memory.retrieval import Retriever
 
@@ -104,6 +105,39 @@ def test_score_is_explainable():
 # --------------------------------------------------------------------- #
 # write policy
 # --------------------------------------------------------------------- #
+def test_history_cannot_crowd_out_the_current_fact():
+    """The SQL limit must apply after the current/history filter.
+
+    Regression: 202 superseded versions filled the FTS LIMIT 200, the current
+    row was never returned, and `recall()` looked like the fact had vanished.
+    """
+    mem = Memory(":memory:")
+    for i in range(202):
+        mem.remember(
+            type="fact", entity=ENTITY, content="交期 %d 天" % i,
+            structured={"key": "lead_time_days", "value": i},
+        )
+    hits = mem.recall(entity=ENTITY, query="交期", types=["fact"], top_k=5)
+    assert hits, "current fact was crowded out by superseded history"
+    assert all(hit.record.valid_to is None for hit in hits)
+    assert hits[0].record.structured["value"] == 201
+    mem.close()
+
+
+def test_extracted_decision_carries_action_type_into_before():
+    mem = Memory(":memory:")
+    created = mem.remember_from_text(
+        "供应商A 交期 45 天，决定换成供应商B",
+        extractor=RuleExtractor("供应商A"),
+    )
+    decisions = [rec for rec in created if rec.type.value == "decision"]
+    assert decisions and decisions[0].action_type == "supplier_switch"
+    card = mem.before("supplier_switch")
+    assert card.verdict == "unverified"
+    assert card.records
+    mem.close()
+
+
 def test_duplicate_fact_is_idempotent():
     mem = Memory(":memory:")
     first = mem.remember(type="fact", entity=ENTITY, content="交期 45 天",
@@ -182,6 +216,13 @@ def test_random_ranking_cannot_pass_the_evaluation():
     """The first harness scored 100% with a ranker that had no scoring at all."""
     report = run_eval(include_baselines=True, latency=False)
     assert report["recall_at_5"] - report["baselines"]["random"]["recall_at_5"] >= 30
+
+
+def test_holdout_set_passes():
+    report = run_holdout()
+    assert report["accuracy"] == 100.0, [
+        (r["name"], r["rank"]) for r in report["results"] if not r["passed"]
+    ]
 
 
 def test_lexical_path_is_load_bearing():

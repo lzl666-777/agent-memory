@@ -149,7 +149,9 @@ class Retriever:
         # lexical path: bm25, filtered in SQL so the limit applies after filtering
         lexical_raw: Dict[str, float] = {}
         if query:
-            for rec, raw in self.store.search_fts_scored(query, entity=entity):
+            for rec, raw in self.store.search_fts_scored(
+                query, entity=entity, include_history=include_history,
+            ):
                 if allowed and rec.type not in allowed:
                     continue
                 if action_type and rec.action_type != action_type:

@@ -101,8 +101,8 @@ it, which is why the previous version could not.
 | verdict | when |
 |---|---|
 | `no_history` | nothing recorded for this action |
-| `unverified` | decisions exist, none has an outcome |
-| `clear` | at least one outcome, no failure |
+| `unverified` | decisions exist, but no clean classification: no outcome, or any outcome is unclassified/unknown |
+| `clear` | at least one outcome and **all** recorded outcomes are classified success |
 | `caution` | some failure, or too few attempts to quote a rate |
 | `high_risk` | ≥2 recorded outcomes and ≥50% of them non-clean |
 
@@ -115,9 +115,9 @@ mem.record_outcome(rec.id, outcome="B 断货两周",
                    status="failure")   # success | failure | mixed | unknown
 ```
 
-`to_prompt()` is bounded (3 lessons, 3 precedents, ~1k chars) so an intervention
-cannot flood a context window. `context` only *ranks* the history — it never
-filters it away, because a precedent is shown, not searched for.
+`to_prompt()` is bounded (3 lessons, 3 precedents, **≤1,200 chars**) so an
+intervention cannot flood a context window. `context` only *ranks* the history —
+it never filters it away, because a precedent is shown, not searched for.
 
 ### Does it change the outcome?
 
@@ -241,6 +241,11 @@ A second suite covers the intervention layer — verdict escalation, cross-entit
 transfer, lesson de-duplication, card bounds, and the migration of a database
 written before `action_type` existed: **8/8 cases**.
 
+A separate **held-out** set (`run_holdout()`) is not used by `run_eval`: it tests
+a same-term wrong-action distractor and an old lesson against a recent decision
+without one. It passes 2/2, but it is evidence of behaviour on those two traps,
+not a generalisation claim.
+
 ## What this is not
 
 Stated plainly, because the gaps are real:
@@ -254,13 +259,42 @@ Stated plainly, because the gaps are real:
   what `record_outcome(status=...)` was told; it cannot detect an outcome the caller
   never recorded, and `high_risk` is a threshold (`≥2 outcomes, ≥50% non-clean`),
   not a calibrated probability.
-- **No LLM-based importance scoring or extraction.** `WritePolicy.score()` is a
-  rule-based placeholder with a documented seam; it does not read content.
+- **Importance scoring is still rule-based.** `WritePolicy.score()` is a
+  placeholder with a documented seam; it does not read content. Extraction has an
+  optional LLM path (see *Extraction* below), but the score stays heuristic.
 - **Single-process.** SQLite without WAL; concurrent writers from multiple threads
   are not supported yet.
 - The 13 cases are a regression suite, not a benchmark. Weights and `BM25_SCALE`
   were calibrated on them, so treat the absolute numbers as *evidence of ranking
   behaviour*, not as generalisation.
+
+## Extraction
+
+You rarely want to call `remember()` by hand. `remember_from_text()` turns a
+conversation or a note into memories:
+
+```python
+from agent_memory.extract import RuleExtractor, LLMExtractor
+
+# zero dependency: regex heuristics, good default
+mem.remember_from_text(
+    "供应商A 交期 45 天，决定换成供应商B",
+    extractor=RuleExtractor("供应商A"),
+)
+
+# higher recall: inject any OpenAI-compatible completion
+complete = lambda prompt: client.chat.completions.create(
+    model="qwen-plus",
+    messages=[{"role": "user", "content": prompt}],
+).choices[0].message.content
+
+mem.remember_from_text(conversation, extractor=LLMExtractor(complete))
+```
+
+Extracted items go through the same write path as a manual `remember()`:
+importance scoring, conflict detection, and versioning. Decisions also carry an
+`action_type` (inferred by `RuleExtractor`, requested from the LLM by
+`LLMExtractor`), so extracted decisions are visible to `before()`.
 
 ## MCP server
 

@@ -17,7 +17,8 @@ Claude Desktop config::
     }
 
 Tools: ``before_decision`` (check the record before acting), ``remember``,
-``recall``, ``record_outcome``.
+``remember_from_text`` (extract from a conversation), ``recall``,
+``record_outcome``.
 """
 
 from __future__ import annotations
@@ -80,6 +81,25 @@ def main() -> None:
         high_risk), the lessons, the precedents, and a ready-to-inject `prompt`.
         """
         return mem.before(action_type, context=context, entity=entity, top_k=top_k).to_dict()
+
+    @mcp.tool()
+    def remember_from_text(text: str, entity: str = "业务", source: str = "") -> list[dict]:
+        """Extract memories from a conversation or note and store them.
+
+        Uses the zero-dependency RuleExtractor, so no LLM call is needed here.
+        Pass ``entity`` when the whole text is about one subject.
+
+        Args:
+            text: the conversation, note or log snippet to learn from.
+            entity: default subject for extracted memories.
+            source: where the text came from, for provenance.
+        """
+        from .extract import RuleExtractor
+
+        created = mem.remember_from_text(
+            text, extractor=RuleExtractor(entity), source=source,
+        )
+        return [record.to_dict() for record in created]
 
     @mcp.tool()
     def recall(

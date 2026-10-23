@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.2
+
+### Fixed
+
+- **Verdict fail-closed:** `clear` now requires every recorded outcome to be
+  classified `success`; a decision set containing only `unknown` outcomes is
+  `unverified`, not `clear`.
+- **History crowding:** the current/history filter is applied in SQL before the
+  FTS/LIKE limit, so 200+ superseded versions can no longer hide the current
+  fact from `recall()`.
+- **Card bound:** the whole `to_prompt()` card is capped at 1,200 characters,
+  not just each field.
+- **Outcome type guard:** `record_outcome()` rejects facts and episodes; it is
+  only meaningful on decisions.
+- **Extraction → intervention:** `RuleExtractor`/`LLMExtractor` now produce
+  `action_type` for decisions, and `remember_from_text()` persists it, so
+  extracted decisions are visible to `before()`.
+
+### Added
+
+- A small held-out set (`run_holdout()`) covering a same-term wrong-action
+  distractor and an old lesson against a recent decision without one.
+
 ## 0.3.1
 
 ### Added
