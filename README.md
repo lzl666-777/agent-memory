@@ -1,5 +1,10 @@
 # agent-memory
 
+![tests](https://github.com/lzl666-777/agent-memory/actions/workflows/ci.yml/badge.svg)
+![python](https://img.shields.io/badge/python-3.10%2B-blue)
+![license](https://img.shields.io/badge/license-MIT-green)
+
+
 > Give your AI agent a memory of **decisions** — and stop it from repeating them.
 
 ## The problem
@@ -26,7 +31,7 @@ Decisions are the point: `record_outcome()` attaches what actually happened, and
 ## Quickstart
 
 ```bash
-git clone https://github.com/you/agent-memory.git
+git clone https://github.com/lzl666-777/agent-memory.git
 cd agent-memory
 pip install -e .
 ```
